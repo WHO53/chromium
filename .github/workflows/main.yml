@@ -1,0 +1,64 @@
+name: Build Kernel Packages 
+
+on:
+  workflow_dispatch:
+  push:
+
+env:
+  PACKAGES_DIR : /home/runner/pkg
+  SOURCE_DIR : ${{ github.workspace }}
+  GH_TOKEN : ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+             mkdir -p ${{ env.PACKAGES_DIR }}
+             docker run \
+              --rm \
+              -e RELENG_FULL_BUILD="yes" \
+              -e RELENG_HOST_ARCH="arm64" \
+              -v ${{ env.PACKAGES_DIR }}:/buildd \
+              -v ${{ env.SOURCE_DIR }}:/buildd/sources \
+              --cap-add=SYS_ADMIN \
+              --security-opt apparmor:unconfined \
+              --security-opt seccomp=unconfined \
+              quay.io/droidian/build-essential:next-arm64 \
+              /bin/sh -c "cd /buildd/sources ; releng-build-package"
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg
+          path: /home/runner/pkg
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: pkg
+        path: ./pkg
+
+    - name: Clone APT Repo
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git clone https://${{ secrets.PAT }}@github.com/WHO53/apt.git --depth=1
+        mkdir -p apt/packages
+        cd apt/packages
+        rm -f chromium*
+        cp ../../pkg/*.deb .
+        git add .
+        git commit -m "CHROMIUM:${GITHUB_SHA::7}"
+        git push
+      env:
+        PAT: ${{ secrets.PAT }}
